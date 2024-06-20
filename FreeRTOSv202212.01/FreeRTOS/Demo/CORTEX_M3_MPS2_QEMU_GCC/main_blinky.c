@@ -1,66 +1,47 @@
-/*
- * FreeRTOS V202212.01
- * Copyright (C) 2020 Amazon.com, Inc. or its affiliates.  All Rights Reserved.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy of
- * this software and associated documentation files (the "Software"), to deal in
- * the Software without restriction, including without limitation the rights to
- * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
- * the Software, and to permit persons to whom the Software is furnished to do so,
- * subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
- * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
- * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
- * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * https://www.FreeRTOS.org
- * https://github.com/FreeRTOS
- *
- */
-
 #include <FreeRTOS.h>
 #include <task.h>
 #include <queue.h>
 #include <stdio.h>
+#include "SMM_MPS2.h"
 
-static void prvQueueReceiveTask( void * pvParameters );
-static void prvQueueSendTask( void * pvParameters );
+// Adjust the base address based on QEMU setup
+#define CMSDK_AHB_BASE          (0x40010000UL)
+#define CMSDK_FPGAIO_BASE       (CMSDK_AHB_BASE + 0x0000UL)
+#define CMSDK_FPGAIO            ((MPS2_FPGAIO_TypeDef *) CMSDK_FPGAIO_BASE)
 
-#define mainQUEUE_RECEIVE_TASK_PRIORITY    ( tskIDLE_PRIORITY + 2 )
-#define mainQUEUE_SEND_TASK_PRIORITY       ( tskIDLE_PRIORITY + 1 )
-#define mainQUEUE_LENGTH                   ( 1 )
-#define mainQUEUE_SEND_FREQUENCY_MS        ( 200 / portTICK_PERIOD_MS )
+static void prvQueueReceiveTask(void *pvParameters);
+static void prvQueueSendTask(void *pvParameters);
+
+#define mainQUEUE_RECEIVE_TASK_PRIORITY    (tskIDLE_PRIORITY + 2)
+#define mainQUEUE_SEND_TASK_PRIORITY       (tskIDLE_PRIORITY + 1)
+#define mainQUEUE_LENGTH                   (1)
+#define mainQUEUE_SEND_FREQUENCY_MS        (200 / portTICK_PERIOD_MS)
+
 /* The queue used by both tasks. */
 static QueueHandle_t xQueue = NULL;
 
-void main_blinky( void )
+void main_blinky(void)
 {
     /* Create the queue. */
-    xQueue = xQueueCreate( mainQUEUE_LENGTH, sizeof( uint32_t ) );
+    xQueue = xQueueCreate(mainQUEUE_LENGTH, sizeof(uint32_t));
 
-    if( xQueue != NULL )
+    if (xQueue != NULL)
     {
         /* Start the two tasks as described in the comments at the top of this
          * file. */
-        xTaskCreate( prvQueueReceiveTask,             /* The function that implements the task. */
-                     "Rx",                            /* The text name assigned to the task - for debug only as it is not used by the kernel. */
-                     configMINIMAL_STACK_SIZE,        /* The size of the stack to allocate to the task. */
-                     NULL,                            /* The parameter passed to the task - not used in this case. */
-                     mainQUEUE_RECEIVE_TASK_PRIORITY, /* The priority assigned to the task. */
-                     NULL );                          /* The task handle is not required, so NULL is passed. */
+        xTaskCreate(prvQueueReceiveTask,             /* The function that implements the task. */
+                    "Rx",                            /* The text name assigned to the task - for debug only as it is not used by the kernel. */
+                    configMINIMAL_STACK_SIZE,        /* The size of the stack to allocate to the task. */
+                    NULL,                            /* The parameter passed to the task - not used in this case. */
+                    mainQUEUE_RECEIVE_TASK_PRIORITY, /* The priority assigned to the task. */
+                    NULL);                           /* The task handle is not required, so NULL is passed. */
 
-        xTaskCreate( prvQueueSendTask,
-                     "TX",
-                     configMINIMAL_STACK_SIZE,
-                     NULL,
-                     mainQUEUE_SEND_TASK_PRIORITY,
-                     NULL );
+        xTaskCreate(prvQueueSendTask,
+                    "TX",
+                    configMINIMAL_STACK_SIZE,
+                    NULL,
+                    mainQUEUE_SEND_TASK_PRIORITY,
+                    NULL);
 
         /* Start the tasks and timer running. */
         vTaskStartScheduler();
@@ -72,60 +53,84 @@ void main_blinky( void )
      * timer tasks to be created.  See the memory management section on the
      * FreeRTOS web site for more details on the FreeRTOS heap
      * https://www.FreeRTOS.org/a00111.html. */
-    for( ; ; )
+    for (;;)
     {
     }
 }
 
-static void prvQueueSendTask( void * pvParameters )
+static void prvQueueSendTask(void *pvParameters)
 {
     TickType_t xNextWakeTime;
     const uint32_t ulValueToSend = 100UL;
 
     /* Remove compiler warning about unused parameter. */
-    ( void ) pvParameters;
+    (void)pvParameters;
 
     /* Initialise xNextWakeTime - this only needs to be done once. */
     xNextWakeTime = xTaskGetTickCount();
 
-    for( ; ; )
+    for (;;)
     {
         /* Place this task in the blocked state until it is time to run again. */
-        vTaskDelayUntil( &xNextWakeTime, mainQUEUE_SEND_FREQUENCY_MS );
+        vTaskDelayUntil(&xNextWakeTime, mainQUEUE_SEND_FREQUENCY_MS);
 
         /* Send to the queue - causing the queue receive task to unblock and
          * toggle the LED.  0 is used as the block time so the sending operation
          * will not block - it shouldn't need to block as the queue should always
          * be empty at this point in the code. */
-        xQueueSend( xQueue, &ulValueToSend, 0U );
+        if (xQueueSend(xQueue, &ulValueToSend, 0U) == pdPASS)
+        {
+            printf("Sent value %lu to the queue\n", ulValueToSend);
+        }
+        else
+        {
+            printf("Failed to send value %lu to the queue\n", ulValueToSend);
+        }
     }
 }
 
 volatile uint32_t ulRxEvents = 0;
-static void prvQueueReceiveTask( void * pvParameters )
+static void prvQueueReceiveTask(void *pvParameters)
 {
     uint32_t ulReceivedValue;
     const uint32_t ulExpectedValue = 100UL;
 
     /* Remove compiler warning about unused parameter. */
-    ( void ) pvParameters;
+    (void)pvParameters;
 
-    for( ; ; )
+    // Initialize the GPIO for controlling the LED
+    CMSDK_FPGAIO->LED = 0x3; // Assuming LEDs are connected to bits [1:0] of LED register
+
+    for (;;)
     {
         /* Wait until something arrives in the queue - this task will block
          * indefinitely provided INCLUDE_vTaskSuspend is set to 1 in
          * FreeRTOSConfig.h. */
-        xQueueReceive( xQueue, &ulReceivedValue, portMAX_DELAY );
-
-        /*  To get here something must have been received from the queue, but
-         * is it the expected value?  If it is, toggle the LED. */
-        if( ulReceivedValue == ulExpectedValue )
+        if (xQueueReceive(xQueue, &ulReceivedValue, portMAX_DELAY) == pdPASS)
         {
-            printf( "%s\n", "blinking" );
-            vTaskDelay( 1000 );
-            ulReceivedValue = 0U;
-            ulRxEvents++;
+            /*  To get here something must have been received from the queue, but
+             * is it the expected value?  If it is, toggle the LED. */
+            if (ulReceivedValue == ulExpectedValue)
+            {
+                // Toggle the LED
+                CMSDK_FPGAIO->LED ^= 0x3; // Toggle bits [1:0] to blink the LED
+
+                // Delay for 1 second
+                vTaskDelay(1000);
+
+                ulReceivedValue = 0U;
+                ulRxEvents++;
+
+                printf("LED toggled successfully\n");
+            }
+            else
+            {
+                printf("Received unexpected value: %lu\n", ulReceivedValue);
+            }
+        }
+        else
+        {
+            printf("Failed to receive from the queue\n");
         }
     }
 }
-/*-----------------------------------------------------------*/
